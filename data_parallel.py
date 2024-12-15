@@ -8,8 +8,9 @@ import os
 import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-from torch.nn.parallel import comm
 from abc import ABC, abstractmethod
+from utils import divide_to_chunks
+
 os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6,7"  # Replace with your available GPU indices
 
 
@@ -206,14 +207,14 @@ class RingAllReduce(DataParallel):
         self.lr = lr
         self.epochs = epochs
         self.loss_fn = loss_fn
-        mp.set_start_method("spawn")
+        #mp.set_start_method("spawn")
         self.barrier = mp.Barrier(self.num_workers)
         processes = self.create_ring_processes(model, self.num_workers)
 
         for p in processes:
             p.join()
 
-    def train_ring_node(self, process_id, input_queue, output_queue):
+    def train_ring_node(self, process_id, model, input_queue, output_queue):
         """
         Function to simulate a process in a ring communication pattern.
         
@@ -221,43 +222,79 @@ class RingAllReduce(DataParallel):
         num_processes: Total number of processes
         input_queue: Queue to receive data from the previous process
         output_queue: Queue to send data to the next process
+
+        Example:
+        A B C D
+
+        i=0:
+
+        A:send a0, rec d3
+        B:send b1, rec a0
+        C:send c2, rec b1
+        D:send d3, rec c2
+
+        i=1:
+
+        A: send a3+d3, rec c2+d2
+        B: send a0+b0, rec a3+d3
+        C: send b1+c1, rec a0+b0
+        D: send c2+d2, rec b1+c1
+
+        i = 2:
+
+        A: send a2+c2+d2, rec b1+c1+d1
+        B: send a3+b3+d3, rec a2+c2+d2
+        C: send a0+b0+c0, rec a3+b3+d3
+        D: send b1+c1+d1, rec a0+b0+c0
+
+        ___
+
+        Share only:
+
+        A: a1+b1+c1+d1
+        B: a2+b2+c2+d2
+        C: a3+b3+c3+d3
+        D: a0+b0+c0+d0
         """
+        model.train()
+        torch.cuda.set_device(self.gpu_ids[process_id])
+        model = model.to(f"cuda:{self.gpu_ids[process_id]}")
 
         # first train for an epoch and get grads
         gradients = self.backprop_epoch(model, self.dataloader, self.gpu_ids[process_id])
+        #gradients = self.test_gradient_validity(process_id)
         
         # share-reduce
         for i in range(self.num_workers-1):
-            curr_send_idx = (process_id + i) % self.num_workers
+            curr_send_idx = (process_id - i) % self.num_workers
             rec_idx = (process_id - i - 1) % self.num_workers
-            curr_chunk = np.array_split(gradients, self.num_workers)[curr_send_idx]
-            output_queue.put(curr_chunk)
+            chunks, slices = divide_to_chunks(gradients, self.num_workers, return_slices=True)
+            output_queue.put(chunks[curr_send_idx])
             received_chunk = input_queue.get()
-            
-            #gradients += received_chunk
-            self.barrier.wait()
+            for idx in range(slices[rec_idx].start, slices[rec_idx].stop):
+                gradients[idx] += received_chunk[idx - slices[rec_idx].start].to(f"cuda:{self.gpu_ids[process_id]}")
 
+        self.barrier.wait()
 
-        '''for i in range(10):
-            try:
-                # Receive data from the previous process
-                received_data = input_queue.get()
-                print(f"Process {process_id} received: {received_data}")
-                
-                # Modify the data or create a new message
-                new_data = f"{received_data} -> Process {process_id}"
-                
-                # Send to the next process
-                output_queue.put(new_data)
-                print(f"Process {process_id} sent: {new_data}")
-                
-                # Optional: break condition (e.g., after a certain number of iterations)
-                if process_id == 0 and "Process 0 -> full circle" in new_data:
-                    break
-            
-            except:
-                print(f"Process {process_id} timed out waiting for input")
-                break'''
+        # share-only stage to get the final grads
+        for i in range(self.num_workers-1):
+            # now we need to shift them by one, because A contains the correct 1-chunks, B contains the correct 2-chunks, etc.
+
+            curr_send_idx = (process_id - i + 1) % self.num_workers
+            rec_idx = (process_id - i) % self.num_workers
+            chunks, slices = divide_to_chunks(gradients, self.num_workers, return_slices=True)
+            output_queue.put(chunks[curr_send_idx])
+            received_chunk = input_queue.get()
+            for idx in range(slices[rec_idx].start, slices[rec_idx].stop):
+                gradients[idx] = received_chunk[idx - slices[rec_idx].start].to(f"cuda:{self.gpu_ids[process_id]}")
+                    
+        # update grads
+        for param, grad in zip(model.parameters(), gradients):
+            if grad is not None:
+                grad = grad.to(param.device)
+                param.grad = grad if param.grad is None else param.grad + grad
+
+        self.barrier.wait()
         
         print(f"Process {process_id} exiting...")
 
@@ -282,14 +319,24 @@ class RingAllReduce(DataParallel):
             
             p = mp.Process(
                 target=self.train_ring_node, 
-                args=(i, input_queue, output_queue))
+                args=(i, model, input_queue, output_queue))
             
             p.start()
             processes.append(p)
         
         return processes
 
-
+    def test_gradient_validity(self, process_id):
+        """
+        This is a helper function to test if the gradients are being shared correctly.
+        """
+        process_val = 10**(-process_id)
+        return [
+            (torch.ones(30,10)*process_val).to(f"cuda:{self.gpu_ids[process_id]}"),
+            (torch.ones(30)*process_val).to(f"cuda:{self.gpu_ids[process_id]}"),
+            (torch.ones(4,30)*process_val).to(f"cuda:{self.gpu_ids[process_id]}"),
+            (torch.ones(4)*process_val).to(f"cuda:{self.gpu_ids[process_id]}"),
+        ]
 
 if __name__ == "__main__":
     N = 100
@@ -305,6 +352,6 @@ if __name__ == "__main__":
     param_server.train(model, epochs=2000)'''
 
 
-    ring_all_reduce = RingAllReduce(dataloader, num_gpus=3)
+    ring_all_reduce = RingAllReduce(dataloader, num_gpus=2)
     ring_all_reduce.train(model, epochs=2000)
     
