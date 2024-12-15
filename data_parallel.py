@@ -2,6 +2,7 @@ import os
 import subprocess
 import numpy as np
 import torch
+import wandb
 import torch.nn as nn
 import torch.multiprocessing as mp
 import os
@@ -16,8 +17,9 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6,7"  # Replace with your avai
 
 
 class DataParallel(ABC):
-    def __init__(self, gpu_ids):
+    def __init__(self, gpu_ids, use_wandb):
         self.gpu_ids = gpu_ids
+        self.use_wandb = use_wandb
 
     @abstractmethod
     def train(model, gpu_id):
@@ -49,10 +51,11 @@ class DataParallel(ABC):
 
         return available_gpus
     
-    def backprop_epoch(self, model, dataloader, device):
+    def backprop_epoch(self, model, dataloader, process_id):
         """
         Perform one backprop epoch and return gradients
         """
+        device = f"cuda:{process_id}"
         model.train()
         model.zero_grad(set_to_none=True)
         for _, (inputs, targets) in enumerate(dataloader):
@@ -60,18 +63,20 @@ class DataParallel(ABC):
             outputs = model(inputs)
             outputs = F.log_softmax(outputs, dim=-1)
             loss = self.loss_fn(outputs, targets)
+            if self.use_wandb and process_id == 0:
+                wandb.log({"training loss": loss.item()})
             loss.backward()
         return [param.grad.clone() for param in model.parameters()] # collecting gradients
 
-    def calculate_acc(self, model, dataloader):
+    def calculate_acc(self, model, dataloader, process_id):
         acc = 0
         for _, (inputs, targets) in enumerate(dataloader):
-            inputs, targets = inputs.to(f"cuda:{self.server_device}"), targets.to(f"cuda:{self.server_device}").long()
+            inputs, targets = inputs.to(f"cuda:{process_id}"), targets.to(f"cuda:{process_id}").long()
             outputs = model(inputs)
             _, predicted = torch.max(outputs, 1)
             acc += (predicted == targets).sum().item()
 
-        acc /= len(self.dataloader.dataset)
+        acc /= len(dataloader.dataset)
         return acc
 
 class ParameterServer(DataParallel):
@@ -80,11 +85,11 @@ class ParameterServer(DataParallel):
     One GPU is used as a parameter server, while the rest are used as workers.
     """
 
-    def __init__(self, dataloader, num_workers=3):
+    def __init__(self, dataloader, num_workers=3, *args, **kwargs):
         gpu_ids = DataParallel.get_available_gpus()
         gpu_ids = gpu_ids[:num_workers + 1]
         self.num_workers = num_workers
-        super().__init__(gpu_ids)
+        super().__init__(gpu_ids, *args, **kwargs)
         self.server_device = gpu_ids[0]
         self.workers = gpu_ids[1:]
         self.dataloader = dataloader
@@ -158,7 +163,9 @@ class ParameterServer(DataParallel):
                         param.grad /= self.num_workers
                 
             # calculate current training accuracy
-            acc = self.calculate_acc(shared_model, self.dataloader)
+            acc = self.calculate_acc(shared_model, self.dataloader, self.server_device)
+            if self.use_wandb:
+                wandb.log({"training acc": acc})
             accs.append(acc)
             # Update model
             optimizer.step()
@@ -184,7 +191,7 @@ class ParameterServer(DataParallel):
             curr_state_dict = self.model_queue.get()
             local_model.load_state_dict(curr_state_dict)        
 
-            gradients = self.backprop_epoch(local_model, self.dataloader, device)
+            gradients = self.backprop_epoch(local_model, self.dataloader, gpu_id)
             self.gradients_queue.put((gradients, gpu_id))
 
             print(f"Worker {device}: Completed epoch {epoch + 1}")
@@ -195,11 +202,11 @@ class ParameterServer(DataParallel):
 
 
 class RingAllReduce(DataParallel):
-    def __init__(self, datamanager: DataManager, num_gpus=3):
+    def __init__(self, datamanager: DataManager, num_gpus=3, *args, **kwargs):
         gpu_ids = DataParallel.get_available_gpus()
         gpu_ids = gpu_ids[:num_gpus]
         self.num_workers = num_gpus
-        super().__init__(gpu_ids)
+        super().__init__(gpu_ids, *args, **kwargs)
         
         self.datamanager = datamanager
 
@@ -260,8 +267,7 @@ class RingAllReduce(DataParallel):
         model = model.to(f"cuda:{self.gpu_ids[process_id]}")
 
         # first train for an epoch and get grads
-        gradients = self.backprop_epoch(model, self.datamanager.get_dataloader(process_id), self.gpu_ids[process_id])
-        #gradients = self.test_gradient_validity(process_id)
+        gradients = self.backprop_epoch(model, self.datamanager.get_dataloader(process_id), process_id)
         
         # share-reduce
         for i in range(self.num_workers-1):
@@ -295,6 +301,10 @@ class RingAllReduce(DataParallel):
 
         self.barrier.wait()
         
+        acc = self.calculate_acc(model, self.datamanager.get_dataloader(process_id), process_id)
+        if self.use_wandb and process_id == 0:
+            wandb.log({"training acc": acc})
+
         print(f"Process {process_id} exiting...")
 
     def create_ring_processes(self, model, num_processes):
@@ -348,11 +358,6 @@ if __name__ == "__main__":
     datamanager = DataManager(dataset, num_gpus)
 
     model = nn.Sequential(nn.Linear(10, 30), nn.ReLU(), nn.Linear(30, n_class))
-
-    
-    '''param_server = ParameterServer(dataloader, num_workers=1)
-    param_server.train(model, epochs=2000)'''
-
 
     ring_all_reduce = RingAllReduce(datamanager, num_gpus=num_gpus)
     ring_all_reduce.train(model, epochs=2000)
