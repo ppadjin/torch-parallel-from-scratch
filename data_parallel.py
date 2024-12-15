@@ -10,6 +10,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from abc import ABC, abstractmethod
 from utils import divide_to_chunks
+from datamanager import DataManager
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6,7"  # Replace with your available GPU indices
 
@@ -62,6 +63,16 @@ class DataParallel(ABC):
             loss.backward()
         return [param.grad.clone() for param in model.parameters()] # collecting gradients
 
+    def calculate_acc(self, model, dataloader):
+        acc = 0
+        for _, (inputs, targets) in enumerate(dataloader):
+            inputs, targets = inputs.to(f"cuda:{self.server_device}"), targets.to(f"cuda:{self.server_device}").long()
+            outputs = model(inputs)
+            _, predicted = torch.max(outputs, 1)
+            acc += (predicted == targets).sum().item()
+
+        acc /= len(self.dataloader.dataset)
+        return acc
 
 class ParameterServer(DataParallel):
     """
@@ -147,7 +158,7 @@ class ParameterServer(DataParallel):
                         param.grad /= self.num_workers
                 
             # calculate current training accuracy
-            acc = self.calculate_acc(shared_model)
+            acc = self.calculate_acc(shared_model, self.dataloader)
             accs.append(acc)
             # Update model
             optimizer.step()
@@ -181,27 +192,16 @@ class ParameterServer(DataParallel):
         # Wait for the server to finish updating the model
         while self.workers_done.value < self.epochs:
             pass        
-    
-    def calculate_acc(self, model):
-        acc = 0
-        for _, (inputs, targets) in enumerate(self.dataloader):
-            inputs, targets = inputs.to(f"cuda:{self.server_device}"), targets.to(f"cuda:{self.server_device}").long()
-            outputs = model(inputs)
-            _, predicted = torch.max(outputs, 1)
-            acc += (predicted == targets).sum().item()
-
-        acc /= len(self.dataloader.dataset)
-        return acc
 
 
 class RingAllReduce(DataParallel):
-    def __init__(self, dataloader, num_gpus=3):
+    def __init__(self, datamanager: DataManager, num_gpus=3):
         gpu_ids = DataParallel.get_available_gpus()
         gpu_ids = gpu_ids[:num_gpus]
         self.num_workers = num_gpus
         super().__init__(gpu_ids)
         
-        self.dataloader = dataloader
+        self.datamanager = datamanager
 
     def train(self, model, lr = 0.001, epochs = 1000, loss_fn = nn.CrossEntropyLoss()):
         self.lr = lr
@@ -261,7 +261,7 @@ class RingAllReduce(DataParallel):
         model = model.to(f"cuda:{self.gpu_ids[process_id]}")
 
         # first train for an epoch and get grads
-        gradients = self.backprop_epoch(model, self.dataloader, self.gpu_ids[process_id])
+        gradients = self.backprop_epoch(model, self.datamanager.get_dataloader(process_id), self.gpu_ids[process_id])
         #gradients = self.test_gradient_validity(process_id)
         
         # share-reduce
@@ -343,15 +343,18 @@ if __name__ == "__main__":
     n_class = 4
     inputs = torch.randn(N, 10)
     targets = torch.randint(0, n_class, (N,))
+    num_gpus = 4
     dataset = torch.utils.data.TensorDataset(inputs, targets)
+
+    datamanager = DataManager(dataset, num_gpus)
 
     model = nn.Sequential(nn.Linear(10, 30), nn.ReLU(), nn.Linear(30, n_class))
 
-    dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
+    
     '''param_server = ParameterServer(dataloader, num_workers=1)
     param_server.train(model, epochs=2000)'''
 
 
-    ring_all_reduce = RingAllReduce(dataloader, num_gpus=2)
+    ring_all_reduce = RingAllReduce(datamanager, num_gpus=num_gpus)
     ring_all_reduce.train(model, epochs=2000)
     
