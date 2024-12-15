@@ -207,7 +207,6 @@ class RingAllReduce(DataParallel):
         self.lr = lr
         self.epochs = epochs
         self.loss_fn = loss_fn
-        #mp.set_start_method("spawn")
         self.barrier = mp.Barrier(self.num_workers)
         processes = self.create_ring_processes(model, self.num_workers)
 
