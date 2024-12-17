@@ -138,7 +138,6 @@ class ParameterServer(DataParallel):
         shared_model = shared_model.to(f"cuda:{self.server_device}")
         optimizer = optim.SGD(shared_model.parameters(), lr=self.lr)
 
-        accs = []
         for epoch in range(self.epochs):
             print(f"Server: Starting epoch {epoch + 1}")
             for _ in range(self.num_workers):
@@ -167,21 +166,22 @@ class ParameterServer(DataParallel):
                 
             # calculate current training accuracy
             acc = self.calculate_acc(shared_model, self.datamanager.get_dataloader(gpu_id), gpu_id)
+            tr_loss = self.calculate_training_loss(shared_model, self.datamanager.get_dataloader(gpu_id), gpu_id)
             if self.use_wandb:
                 if not self.init_wandb:
                     wandb.init(project="test", group='DDP')
                     self.init_wandb = True
                 wandb.log({"training acc": acc})
-            accs.append(acc)
+                wandb.log({"training loss": tr_loss})
+                print(f"Server: Epoch {epoch + 1}, acc: {acc}")
+                print(f"Server: Epoch {epoch + 1}, loss: {tr_loss}")
             # Update model
             optimizer.step()
             optimizer.zero_grad()
 
             # Notify workers that the model is updated
             self.workers_done.value += 1
-        
-        print(f"Server: Training completed. Accuracies: {accs}")
-        
+                
     def run_worker(self, gpu_id, shared_model):
         device = f"cuda:{gpu_id}"
         torch.cuda.set_device(gpu_id)
@@ -205,6 +205,18 @@ class ParameterServer(DataParallel):
         # Wait for the server to finish updating the model
         while self.workers_done.value < self.epochs:
             pass        
+
+    def calculate_training_loss(self, model, dataloader, process_id):
+        """
+        Calculate the training loss for a given model and dataloader.
+        """
+        loss = 0
+        for _, (inputs, targets) in enumerate(dataloader):
+            inputs, targets = inputs.to(f"cuda:{process_id}"), targets.to(f"cuda:{process_id}").long()
+            outputs = model(inputs)
+            outputs = F.log_softmax(outputs, dim=-1)
+            loss += self.loss_fn(outputs, targets).item()
+        return loss
 
 
 class RingAllReduce(DataParallel):
