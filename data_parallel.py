@@ -202,34 +202,10 @@ class ParameterServer(DataParallel):
 
 
 class RingAllReduce(DataParallel):
-    def __init__(self, datamanager: DataManager, num_gpus=3, *args, **kwargs):
-        gpu_ids = DataParallel.get_available_gpus()
-        gpu_ids = gpu_ids[:num_gpus]
-        self.num_workers = num_gpus
-        super().__init__(gpu_ids, *args, **kwargs)
-        
-        self.datamanager = datamanager
+    """
+    This class implements a ring all-reduce strategy for data parallelism.
 
-    def train(self, model, lr = 0.001, epochs = 1000, loss_fn = nn.CrossEntropyLoss()):
-        self.lr = lr
-        self.epochs = epochs
-        self.loss_fn = loss_fn
-        self.barrier = mp.Barrier(self.num_workers)
-        processes = self.create_ring_processes(model, self.num_workers)
-
-        for p in processes:
-            p.join()
-
-    def train_ring_node(self, process_id, model, input_queue, output_queue):
-        """
-        Function to simulate a process in a ring communication pattern.
-        
-        process_id: Unique identifier for this process
-        num_processes: Total number of processes
-        input_queue: Queue to receive data from the previous process
-        output_queue: Queue to send data to the next process
-
-        Example:
+    Example:
         A B C D
 
         i=0:
@@ -261,49 +237,82 @@ class RingAllReduce(DataParallel):
         B: a2+b2+c2+d2
         C: a3+b3+c3+d3
         D: a0+b0+c0+d0
+    """
+    def __init__(self, datamanager: DataManager, num_gpus=3, *args, **kwargs):
+        gpu_ids = DataParallel.get_available_gpus()
+        gpu_ids = gpu_ids[:num_gpus]
+        self.num_workers = num_gpus
+        super().__init__(gpu_ids, *args, **kwargs)
+        
+        self.datamanager = datamanager
+
+    def train(self, model, lr = 0.001, epochs = 1000, loss_fn = nn.CrossEntropyLoss()):
+        self.lr = lr
+        self.epochs = epochs
+        self.loss_fn = loss_fn
+        self.barrier = mp.Barrier(self.num_workers)
+        self.optimizer = optim.SGD(model.parameters(), lr=self.lr)
+        processes = self.create_ring_processes(model, self.num_workers)
+
+        for p in processes:
+            p.join()
+
+    def train_ring_node(self, process_id, model, input_queue, output_queue):
+        """
+        Function to simulate a process in a ring communication pattern.
+        
+        process_id: Unique identifier for this process
+        num_processes: Total number of processes
+        input_queue: Queue to receive data from the previous process
+        output_queue: Queue to send data to the next process
         """
         model.train()
         torch.cuda.set_device(self.gpu_ids[process_id])
         model = model.to(f"cuda:{self.gpu_ids[process_id]}")
+        for epoch in range(self.epochs):
+            # first train for an epoch and get grads
+            gradients = self.backprop_epoch(model, self.datamanager.get_dataloader(process_id), process_id)
+            
+            # share-reduce
+            for i in range(self.num_workers-1):
+                curr_send_idx = (process_id - i) % self.num_workers
+                rec_idx = (process_id - i - 1) % self.num_workers
+                chunks, slices = divide_to_chunks(gradients, self.num_workers, return_slices=True)
+                output_queue.put(chunks[curr_send_idx])
+                received_chunk = input_queue.get()
+                for idx in range(slices[rec_idx].start, slices[rec_idx].stop):
+                    gradients[idx] += received_chunk[idx - slices[rec_idx].start].to(f"cuda:{self.gpu_ids[process_id]}")
 
-        # first train for an epoch and get grads
-        gradients = self.backprop_epoch(model, self.datamanager.get_dataloader(process_id), process_id)
-        
-        # share-reduce
-        for i in range(self.num_workers-1):
-            curr_send_idx = (process_id - i) % self.num_workers
-            rec_idx = (process_id - i - 1) % self.num_workers
-            chunks, slices = divide_to_chunks(gradients, self.num_workers, return_slices=True)
-            output_queue.put(chunks[curr_send_idx])
-            received_chunk = input_queue.get()
-            for idx in range(slices[rec_idx].start, slices[rec_idx].stop):
-                gradients[idx] += received_chunk[idx - slices[rec_idx].start].to(f"cuda:{self.gpu_ids[process_id]}")
+            self.barrier.wait()
 
-        self.barrier.wait()
+            # share-only stage to get the final grads
+            for i in range(self.num_workers-1):
+                # now we need to shift them by one, because A contains the correct 1-chunks, B contains the correct 2-chunks, etc.
 
-        # share-only stage to get the final grads
-        for i in range(self.num_workers-1):
-            # now we need to shift them by one, because A contains the correct 1-chunks, B contains the correct 2-chunks, etc.
+                curr_send_idx = (process_id - i + 1) % self.num_workers
+                rec_idx = (process_id - i) % self.num_workers
+                chunks, slices = divide_to_chunks(gradients, self.num_workers, return_slices=True)
+                output_queue.put(chunks[curr_send_idx])
+                received_chunk = input_queue.get()
+                for idx in range(slices[rec_idx].start, slices[rec_idx].stop):
+                    gradients[idx] = received_chunk[idx - slices[rec_idx].start].to(f"cuda:{self.gpu_ids[process_id]}")
+                        
+            # update grads
+            for param, grad in zip(model.parameters(), gradients):
+                if grad is not None:
+                    grad = grad.to(param.device)
+                    param.grad = grad if param.grad is None else param.grad + grad
 
-            curr_send_idx = (process_id - i + 1) % self.num_workers
-            rec_idx = (process_id - i) % self.num_workers
-            chunks, slices = divide_to_chunks(gradients, self.num_workers, return_slices=True)
-            output_queue.put(chunks[curr_send_idx])
-            received_chunk = input_queue.get()
-            for idx in range(slices[rec_idx].start, slices[rec_idx].stop):
-                gradients[idx] = received_chunk[idx - slices[rec_idx].start].to(f"cuda:{self.gpu_ids[process_id]}")
-                    
-        # update grads
-        for param, grad in zip(model.parameters(), gradients):
-            if grad is not None:
-                grad = grad.to(param.device)
-                param.grad = grad if param.grad is None else param.grad + grad
+            self.barrier.wait()
 
-        self.barrier.wait()
-        
-        acc = self.calculate_acc(model, self.datamanager.get_dataloader(process_id), process_id)
-        if self.use_wandb and process_id == 0:
-            wandb.log({"training acc": acc})
+            # update model
+            self.optimizer.step()
+            self.optimizer.zero_grad()
+            
+            acc = self.calculate_acc(model, self.datamanager.get_dataloader(process_id), process_id)
+            print(f"Process {process_id}: Epoch {epoch + 1}, acc: {acc}")
+            if self.use_wandb and process_id == 0:
+                wandb.log({"training acc": acc})
 
         print(f"Process {process_id} exiting...")
 
