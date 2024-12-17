@@ -128,45 +128,47 @@ def mobilenet_v2_like(input_shape=(3, 32, 32), num_classes=10):
 
     return MobileNetV2Like(input_shape=input_shape, num_classes=num_classes)
 
-# Instantiate the model
-model = mobilenet_v2_like()
-# Print a summary of the model architecture
-from torchsummary import summary
 
-# Print model summary
-summary(model, input_size=(3, 32, 32), device='cpu')
+if __name__ == "__main__":
+    # Instantiate the model
+    model = mobilenet_v2_like()
+    # Print a summary of the model architecture
+    from torchsummary import summary
 
-transform = transforms.Compose([
-    transforms.ToTensor(),  # This will also normalize from [0, 255] to [0, 1]
-])
+    # Print model summary
+    summary(model, input_size=(3, 32, 32), device='cpu')
 
-train_dataset = torchvision.datasets.CIFAR10(
-    root='./data', 
-    train=True,
-    download=True, 
-    transform=transform
-)
-train_size = 1000
-train_indices = torch.randperm(len(train_dataset))[:train_size]
+    transform = transforms.Compose([
+        transforms.ToTensor(),  # This will also normalize from [0, 255] to [0, 1]
+    ])
 
-train_subset = torch.utils.data.Subset(train_dataset, train_indices)
+    train_dataset = torchvision.datasets.CIFAR10(
+        root='./data', 
+        train=True,
+        download=True, 
+        transform=transform
+    )
+    train_size = 1000
+    train_indices = torch.randperm(len(train_dataset))[:train_size]
 
-from data_parallel import RingAllReduce
-from datamanager import DataManager
+    train_subset = torch.utils.data.Subset(train_dataset, train_indices)
 
-n_gpus = 4
-use_wandb = True
-datamanager = DataManager(train_subset, n_gpus)
-epochs = 10
-if use_wandb:
-    wandb.login()
-    wandb.init(project="mobilenet", config={})
-    wandb.config.update({"n_gpus": n_gpus})
-    wandb.config.update({"batch_size": datamanager.batch_size})
-    wandb.config.update({"epochs": epochs})
-    wandb.config.update({"strategy": "ring_all_reduce"})
+    from data_parallel import RingAllReduce
+    from datamanager import DataManager
+
+    n_gpus = 2
+    use_wandb = True
+    datamanager = DataManager(train_subset, n_gpus)
+    epochs = 100
+    if use_wandb:
+        wandb.login()
+        wandb.init(project="mobilenet", config={})
+        wandb.config.update({"n_gpus": n_gpus})
+        wandb.config.update({"batch_size": datamanager.batch_size})
+        wandb.config.update({"epochs": epochs})
+        wandb.config.update({"strategy": "ring_all_reduce"})
 
 
-ring_all_reduce = RingAllReduce(datamanager, num_gpus=n_gpus, use_wandb=use_wandb)
-ring_all_reduce.train(model, epochs=epochs)
+    ring_all_reduce = RingAllReduce(datamanager, num_gpus=n_gpus, use_wandb=use_wandb)
+    ring_all_reduce.train(model, epochs=epochs, lr=0.01)
 
