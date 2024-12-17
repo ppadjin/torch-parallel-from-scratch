@@ -17,9 +17,11 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6,7"  # Replace with your avai
 
 
 class DataParallel(ABC):
-    def __init__(self, gpu_ids, use_wandb):
+    def __init__(self, gpu_ids, use_wandb=True, wandb_setup={}):
         self.gpu_ids = gpu_ids
         self.use_wandb = use_wandb
+        self.wandb_config = wandb_setup['config']
+        self.wandb_project = wandb_setup['project']
 
     @abstractmethod
     def train(model, gpu_id):
@@ -85,14 +87,15 @@ class ParameterServer(DataParallel):
     One GPU is used as a parameter server, while the rest are used as workers.
     """
 
-    def __init__(self, dataloader, num_workers=3, *args, **kwargs):
+    def __init__(self, datamanager, num_gpus=3, *args, **kwargs):
+        self.num_workers = num_gpus - 1
         gpu_ids = DataParallel.get_available_gpus()
-        gpu_ids = gpu_ids[:num_workers + 1]
-        self.num_workers = num_workers
+        gpu_ids = gpu_ids[:num_gpus]
         super().__init__(gpu_ids, *args, **kwargs)
         self.server_device = gpu_ids[0]
         self.workers = gpu_ids[1:]
-        self.dataloader = dataloader
+        self.datamanager = datamanager
+        self.init_wandb = False
 
     def train(self, model, lr = 0.001, epochs = 1000, loss_fn = nn.CrossEntropyLoss()):
 
@@ -163,8 +166,11 @@ class ParameterServer(DataParallel):
                         param.grad /= self.num_workers
                 
             # calculate current training accuracy
-            acc = self.calculate_acc(shared_model, self.dataloader, self.server_device)
+            acc = self.calculate_acc(shared_model, self.datamanager.get_dataloader(gpu_id), gpu_id)
             if self.use_wandb:
+                if not self.init_wandb:
+                    wandb.init(project="test", group='DDP')
+                    self.init_wandb = True
                 wandb.log({"training acc": acc})
             accs.append(acc)
             # Update model
@@ -191,7 +197,7 @@ class ParameterServer(DataParallel):
             curr_state_dict = self.model_queue.get()
             local_model.load_state_dict(curr_state_dict)        
 
-            gradients = self.backprop_epoch(local_model, self.dataloader, gpu_id)
+            gradients = self.backprop_epoch(local_model, self.datamanager.get_dataloader(gpu_id), gpu_id)
             self.gradients_queue.put((gradients, gpu_id))
 
             print(f"Worker {device}: Completed epoch {epoch + 1}")
@@ -246,7 +252,9 @@ class RingAllReduce(DataParallel):
         
         self.datamanager = datamanager
 
-    def train(self, model, lr = 0.001, epochs = 1000, loss_fn = nn.CrossEntropyLoss()):
+        wandb.init(project=self.wandb_project, group='DDP', config=self.wandb_config)
+
+    def train(self, model, lr = 0.1, epochs = 1000, loss_fn = nn.CrossEntropyLoss()):
         self.lr = lr
         self.epochs = epochs
         self.loss_fn = loss_fn
@@ -357,17 +365,38 @@ class RingAllReduce(DataParallel):
         ]
 
 if __name__ == "__main__":
-    N = 100
+    N = 3000
     n_class = 4
     inputs = torch.randn(N, 10)
     targets = torch.randint(0, n_class, (N,))
     num_gpus = 4
     dataset = torch.utils.data.TensorDataset(inputs, targets)
+    strategy = "param_server"
+    #strategy = "ring_all_reduce"
 
-    datamanager = DataManager(dataset, num_gpus)
+    # wandb
+    wandb.login()
+    wandb.init(project="test", 
+                config={
+                    "n_gpus": num_gpus,
+                    "batch_size": 32,
+                    "epochs": 1000,
+                    "strategy": strategy}, 
+                group='DDP')
+
+
+    
 
     model = nn.Sequential(nn.Linear(10, 30), nn.ReLU(), nn.Linear(30, n_class))
 
-    ring_all_reduce = RingAllReduce(datamanager, num_gpus=num_gpus)
-    ring_all_reduce.train(model, epochs=2000)
+    #ring_all_reduce = RingAllReduce(datamanager, num_gpus=num_gpus)
+    #ring_all_reduce.train(model, epochs=2000)
     
+    if strategy == "ring_all_reduce":
+        datamanager = DataManager(dataset, num_gpus, strategy=strategy)
+        ring_all_reduce = RingAllReduce(datamanager, num_gpus=num_gpus, use_wandb=True)
+        ring_all_reduce.train(model, epochs=100)
+    elif strategy == "param_server":
+        datamanager = DataManager(dataset, num_gpus, strategy=strategy)
+        param_server = ParameterServer(datamanager, num_gpus=num_gpus, use_wandb=True)
+        param_server.train(model, epochs=100)

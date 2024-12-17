@@ -16,18 +16,29 @@ from typing import Union
 
 
 class DataManager:
-    def __init__(self, dataset: Union[torch.Tensor, torch.utils.data.Dataset], n_split: int, batch_size: int = 32):
+    def __init__(self, dataset: Union[torch.Tensor, torch.utils.data.Dataset], n_gpus: int, strategy: str, batch_size: int = 32):
+        
         self.batch_size = batch_size
-        self.n_split = n_split
+        if strategy == 'ring_all_reduce':
+            self.n_split = n_gpus
+        elif strategy == 'param_server':
+            self.n_split = n_gpus - 1
+
         self.n = len(dataset)
-        self.chunk_size = self.n // n_split
+        self.chunk_size = self.n // self.n_split
 
         if isinstance(dataset, torch.Tensor):
             self.dataset = torch.utils.data.TensorDataset(dataset)
         elif isinstance(dataset, torch.utils.data.Dataset):
             self.dataset = dataset
 
-        self.datasets = torch.utils.data.random_split(self.dataset, [self.chunk_size] * n_split)
+        split_chunks = [self.chunk_size] * self.n_split
+        for i in range(self.n % self.n_split): # fill it up to add up to the length of dataset
+            split_chunks[i] += 1
+
+        self.datasets = torch.utils.data.random_split(self.dataset, split_chunks)
+
+        self.datasets = [dataset, *self.datasets] # make it so that param server has the full dataset, so it can evaluate the accuracy of the model
         
         self.dataloaders = [DataLoader(dataset, batch_size=self.batch_size, shuffle=True) for dataset in self.datasets]
 
