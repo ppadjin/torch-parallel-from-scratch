@@ -1,5 +1,6 @@
 import os
 import subprocess
+import time
 import numpy as np
 import torch
 import wandb
@@ -94,6 +95,7 @@ class ParameterServer(DataParallel):
         super().__init__(gpu_ids, *args, **kwargs)
         self.server_device = gpu_ids[0]
         self.workers = gpu_ids[1:]
+        self.gpu_process_map = {gpu_id: i for i, gpu_id in enumerate(gpu_ids)} # easy way to change between gpu id and process id
         self.datamanager = datamanager
         self.init_wandb = False
 
@@ -134,6 +136,8 @@ class ParameterServer(DataParallel):
         """
         assert gpu_id == self.server_device
 
+        self.start_time = time.time()
+
         torch.cuda.set_device(self.server_device)
         shared_model = shared_model.to(f"cuda:{self.server_device}")
         optimizer = optim.SGD(shared_model.parameters(), lr=self.lr)
@@ -173,6 +177,7 @@ class ParameterServer(DataParallel):
                     self.init_wandb = True
                 wandb.log({"training acc": acc})
                 wandb.log({"training loss": tr_loss})
+                wandb.log({"Time": time.time() - self.start_time})
                 print(f"Server: Epoch {epoch + 1}, acc: {acc}")
                 print(f"Server: Epoch {epoch + 1}, loss: {tr_loss}")
             # Update model
@@ -196,8 +201,8 @@ class ParameterServer(DataParallel):
             
             curr_state_dict = self.model_queue.get()
             local_model.load_state_dict(curr_state_dict)        
-
-            gradients = self.backprop_epoch(local_model, self.datamanager.get_dataloader(gpu_id), gpu_id)
+            gradients = self.backprop_epoch(local_model, self.datamanager.get_dataloader(self.gpu_process_map[gpu_id]), gpu_id)
+            
             self.gradients_queue.put((gradients, gpu_id))
 
             print(f"Worker {device}: Completed epoch {epoch + 1}")
