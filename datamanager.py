@@ -41,7 +41,7 @@ class DataManager:
         if strategy == 'param_server':
             self.datasets = [dataset, *self.datasets] # make it so that param server has the full dataset, so it can evaluate the accuracy of the model
         
-        self.dataloaders = [DataLoader(dataset, batch_size=self.batch_size, shuffle=True) for dataset in self.datasets]
+        self.dataloaders = [DataLoader(d, batch_size=self.batch_size, shuffle=True) for d in self.datasets]
 
     def get_dataloader(self, worker_id):
         return self.dataloaders[worker_id]      
