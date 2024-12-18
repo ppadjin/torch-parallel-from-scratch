@@ -149,9 +149,12 @@ class ParameterServer(DataParallel):
                 if not self.init_wandb:
                     wandb.init(project="test", group='DDP')
                     self.init_wandb = True
-                wandb.log({"training acc": acc})
-                wandb.log({"training loss": tr_loss})
-                wandb.log({"Time": time.time() - self.start_time})
+                wandb.log({
+                    "training acc": acc,
+                    "training loss": tr_loss,
+                    "time": time.time() - self.start_time
+                    })
+                
                 print(f"Server: Epoch {epoch + 1}, acc: {acc}")
                 print(f"Server: Epoch {epoch + 1}, loss: {tr_loss}")
 
