@@ -3,7 +3,6 @@
 import argparse
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6,7"
-#os.environ["NCCL_DEBUG"] = "INFO"
 import torch
 import torchvision
 import torchvision.transforms as transforms
@@ -14,10 +13,11 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision.transforms import functional as F
 import numpy as np
 import random
+import wandb
 import torch.nn as nn
 from timeit import timeit
 from data_parallel import DataParallel
-
+from utils import get_available_gpus
 
 def mobilenet_v2_like(input_shape=(3, 32, 32), num_classes=10):
     class InvertedResidualBlock(nn.Module):
@@ -269,7 +269,7 @@ if __name__ == "__main__":
     parser.add_argument('--test_size', type=int, default=1000, help='Number of samples in the test set')
     parser.add_argument('--lr', type=float, default=0.01, help='Learning rate for training')
     parser.add_argument('--n_gpus', type=int, default=2, help='Number of GPUs to use for training')
-
+    parser.add_argument('--use_wandb', type=bool, default=True, help='Whether to use Weights & Biases for logging')
 
     args = parser.parse_args()
     # Define transforms for preprocessing
@@ -291,9 +291,6 @@ if __name__ == "__main__":
         download=True, 
         transform=transform
     )
-
-    # Subsample the datasets
-    
 
     # Create subsampled indices
     train_indices = torch.randperm(len(train_dataset))[:args.train_size]
@@ -329,7 +326,7 @@ if __name__ == "__main__":
     # Learning rate scheduler (optional)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
 
-    available_gpus = DataParallel.get_available_gpus()[:args.n_gpus]
+    available_gpus = get_available_gpus()[:args.n_gpus]
     assert len(available_gpus) == args.n_gpus, f"There are only {len(available_gpus)} available GPUs, but you requested {args.n_gpus} GPUs."
     # Check if multiple GPUs are available
     if len(available_gpus) > 1:

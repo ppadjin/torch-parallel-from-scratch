@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader
 from abc import ABC, abstractmethod
 from utils import divide_to_chunks
 from datamanager import DataManager
+from utils import get_available_gpus
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6,7"  # Replace with your available GPU indices
 
@@ -30,29 +31,6 @@ class DataParallel(ABC):
         This method should be implemented by the subclass, when implementing strategy for data parallelism.
         """
         pass
-
-
-    @staticmethod
-    def get_available_gpus(th=10):
-        """
-        Avoid using someone else's GPU by checking for available GPUs. Criteria is that I only use GPUs with less than th% utilization.
-        """
-        result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=index,utilization.gpu", "--format=csv,noheader,nounits"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-        
-        )
-        assert result.returncode == 0 # check if valid
-
-        available_gpus = []
-        for line in result.stdout.strip().split("\n"):
-            gpu_index, gpu_utilization = line.split(", ")
-            gpu_index = int(gpu_index)
-            gpu_utilization = int(gpu_utilization)
-            
-            if gpu_utilization < th: available_gpus.append(gpu_index)
-
-        return available_gpus
     
     def backprop_epoch(self, model, dataloader, process_id):
         """
@@ -90,7 +68,7 @@ class ParameterServer(DataParallel):
 
     def __init__(self, datamanager, num_gpus=3, *args, **kwargs):
         self.num_workers = num_gpus - 1
-        gpu_ids = DataParallel.get_available_gpus()
+        gpu_ids = get_available_gpus()
         gpu_ids = gpu_ids[:num_gpus]
         super().__init__(gpu_ids, *args, **kwargs)
         self.server_device = gpu_ids[0]
@@ -116,17 +94,14 @@ class ParameterServer(DataParallel):
             processes.append(p)
             p.start()
     
-        # Wait for all processes to finish
         for p in processes:
             p.join()
     
     def run(self, gpu_id, model):
         
         if gpu_id == self.server_device:
-            # Perform parameter update
             self.run_server(gpu_id, model)
         else:
-            # Perform computation
             self.run_worker(gpu_id, model)
         
     def run_server(self, gpu_id, shared_model):
@@ -147,7 +122,6 @@ class ParameterServer(DataParallel):
             for _ in range(self.num_workers):
                 self.model_queue.put(shared_model.state_dict())
 
-            # Collect gradients from all workers
             for _ in range(self.num_workers):
                 try:
                     worker_grads, rank = self.gradients_queue.get()
@@ -162,7 +136,7 @@ class ParameterServer(DataParallel):
                             grad = grad.to(param.device)
                             param.grad = grad if param.grad is None else param.grad + grad
 
-            # Average gradients
+            # Average gradients - divide by number of workers
             with torch.no_grad():
                 for param in shared_model.parameters():
                     if param.grad is not None:
@@ -180,11 +154,10 @@ class ParameterServer(DataParallel):
                 wandb.log({"Time": time.time() - self.start_time})
                 print(f"Server: Epoch {epoch + 1}, acc: {acc}")
                 print(f"Server: Epoch {epoch + 1}, loss: {tr_loss}")
-            # Update model
+
             optimizer.step()
             optimizer.zero_grad()
 
-            # Notify workers that the model is updated
             self.workers_done.value += 1
                 
     def run_worker(self, gpu_id, shared_model):
@@ -262,7 +235,7 @@ class RingAllReduce(DataParallel):
         D: a0+b0+c0+d0
     """
     def __init__(self, datamanager: DataManager, num_gpus=3, *args, **kwargs):
-        gpu_ids = DataParallel.get_available_gpus()
+        gpu_ids = get_available_gpus()
         gpu_ids = gpu_ids[:num_gpus]
         self.num_workers = num_gpus
         super().__init__(gpu_ids, *args, **kwargs)
