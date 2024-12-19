@@ -111,7 +111,6 @@ class ParameterServer(DataParallel):
         """
         assert gpu_id == self.server_device
 
-        self.start_time = time.time()
 
         torch.cuda.set_device(self.server_device)
         shared_model = shared_model.to(f"cuda:{self.server_device}")
@@ -119,12 +118,13 @@ class ParameterServer(DataParallel):
 
         for epoch in range(self.epochs):
             print(f"Server: Starting epoch {epoch + 1}")
+            self.start_time = time.time()
             for _ in range(self.num_workers):
                 self.model_queue.put(shared_model.state_dict())
 
             for _ in range(self.num_workers):
                 try:
-                    worker_grads, rank = self.gradients_queue.get()
+                    worker_grads, rank, epoch_time = self.gradients_queue.get()
                 except Exception as e:
                     print(f"Server: Error getting gradients from worker: {e}")
                     continue
@@ -152,7 +152,8 @@ class ParameterServer(DataParallel):
                 wandb.log({
                     "training acc": acc,
                     "training loss": tr_loss,
-                    "time": time.time() - self.start_time
+                    "time": time.time() - self.start_time,
+                    "epoch_calculation_time": epoch_time
                     })
                 
                 print(f"Server: Epoch {epoch + 1}, acc: {acc}")
@@ -176,10 +177,11 @@ class ParameterServer(DataParallel):
             # Load updated model from shared model
             
             curr_state_dict = self.model_queue.get()
-            local_model.load_state_dict(curr_state_dict)        
+            local_model.load_state_dict(curr_state_dict)
+            epoch_start_time = time.time()  
             gradients = self.backprop_epoch(local_model, self.datamanager.get_dataloader(self.gpu_process_map[gpu_id]), gpu_id)
-            
-            self.gradients_queue.put((gradients, gpu_id))
+            epoch_time = time.time() - epoch_start_time
+            self.gradients_queue.put((gradients, gpu_id, epoch_time))
 
             print(f"Worker {device}: Completed epoch {epoch + 1}")
         
