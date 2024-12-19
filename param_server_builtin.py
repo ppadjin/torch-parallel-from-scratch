@@ -15,7 +15,6 @@ import numpy as np
 import random
 import wandb
 import torch.nn as nn
-from timeit import timeit
 from data_parallel import DataParallel
 from utils import get_available_gpus
 
@@ -132,7 +131,7 @@ def mobilenet_v2_like(input_shape=(3, 32, 32), num_classes=10):
 
     return MobileNetV2Like(input_shape=input_shape, num_classes=num_classes)
 
-def train(model, train_loader, criterion, optimizer, device, epoch, num_epochs):
+def train(model, train_loader, criterion, optimizer, device, epoch, args):
     model.train()  # Set model to training mode
     running_loss = 0.0
     total = 0
@@ -179,6 +178,7 @@ def train(model, train_loader, criterion, optimizer, device, epoch, num_epochs):
         # Backward pass
         backward_start = time.time()
         loss.backward()
+
         optimizer.step()
         torch.cuda.synchronize()  # Ensure all CUDA kernels are finished
         backward_end = time.time()
@@ -212,10 +212,23 @@ def train(model, train_loader, criterion, optimizer, device, epoch, num_epochs):
     epoch_acc = 100.0 * correct / total
 
     print(
-        f'Epoch [{epoch + 1}/{num_epochs}] - '
+        f'Epoch [{epoch + 1}/{args.epochs}] - '
         f'Loss: {epoch_loss:.4f} - '
         f'Accuracy: {epoch_acc:.2f}%'
     )
+
+    if args.use_wandb:
+        wandb.log({
+            "train_loss": epoch_loss,
+            "train_acc": epoch_acc,
+            "time":time.time() - args.start_time,
+            "epoch": epoch,
+            "data_loading_time": epoch_data_loading_time,
+            "forward_time": epoch_forward_time,
+            "backward_time": epoch_backward_time,
+            "all_others_time": epoch_python_overhead_time,
+            "total_time": epoch_total_time
+         })
 
     # Print timing breakdown for this epoch
     print(f"Epoch {epoch + 1} Timing Breakdown:")
@@ -304,7 +317,7 @@ if __name__ == "__main__":
 
     # Create data loaders
     train_loader = DataLoader(
-        train_dataset,
+        train_subset,
         batch_size=args.batch_size,
         shuffle=True,
         # num_workers=4,  # Parallel data loading
@@ -338,9 +351,14 @@ if __name__ == "__main__":
     model.to(device)
     print("Param server builtin is running")
 
+    if args.use_wandb:
+        wandb.init(project="param_server_builtin")
+        wandb.config.update(args)
 
     # Main loop: perform training and evaluation
-    for epoch in range(args.num_epochs):
+
+    args.start_time = time.time()
+    for epoch in range(args.epochs):
         train_loss, train_acc = train(
-            model, train_loader, criterion, optimizer, device, epoch, args.num_epochs
+            model, train_loader, criterion, optimizer, device, epoch, args
         )
