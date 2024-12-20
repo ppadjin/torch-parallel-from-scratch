@@ -119,9 +119,13 @@ class ParameterServer(DataParallel):
         for epoch in range(self.epochs):
             print(f"Server: Starting epoch {epoch + 1}")
             self.start_time = time.time()
+            model_send_start_time = time.time()
             for _ in range(self.num_workers):
                 self.model_queue.put(shared_model.state_dict())
 
+            model_send_time = time.time() - model_send_start_time
+
+            gradient_wait_start_time = time.time()
             for _ in range(self.num_workers):
                 try:
                     worker_grads, rank, epoch_time = self.gradients_queue.get()
@@ -136,6 +140,7 @@ class ParameterServer(DataParallel):
                             grad = grad.to(param.device)
                             param.grad = grad if param.grad is None else param.grad + grad
 
+            gradient_wait_time = time.time() - gradient_wait_start_time
             # Average gradients - divide by number of workers
             with torch.no_grad():
                 for param in shared_model.parameters():
@@ -153,7 +158,9 @@ class ParameterServer(DataParallel):
                     "training acc": acc,
                     "training loss": tr_loss,
                     "time": time.time() - self.start_time,
-                    "epoch_calculation_time": epoch_time
+                    "epoch_calculation_time": epoch_time,
+                    "model_send_time": model_send_time,
+                    "gradient_wait_time": gradient_wait_time
                     })
                 
                 print(f"Server: Epoch {epoch + 1}, acc: {acc}")
@@ -378,9 +385,6 @@ if __name__ == "__main__":
                     "epochs": 1000,
                     "strategy": strategy}, 
                 group='DDP')
-
-
-    
 
     model = nn.Sequential(nn.Linear(10, 30), nn.ReLU(), nn.Linear(30, n_class))
 
