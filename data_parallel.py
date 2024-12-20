@@ -36,7 +36,8 @@ class DataParallel(ABC):
         """
         Perform one backprop epoch and return gradients
         """
-        device = f"cuda:{process_id}"
+        device = model.parameters().__next__().device
+
         model.train()
         model.zero_grad(set_to_none=True)
         for _, (inputs, targets) in enumerate(dataloader):
@@ -51,8 +52,9 @@ class DataParallel(ABC):
 
     def calculate_acc(self, model, dataloader, process_id):
         acc = 0
+        device = model.parameters().__next__().device
         for _, (inputs, targets) in enumerate(dataloader):
-            inputs, targets = inputs.to(f"cuda:{process_id}"), targets.to(f"cuda:{process_id}").long()
+            inputs, targets = inputs.to(device), targets.to(device).long()
             outputs = model(inputs)
             _, predicted = torch.max(outputs, 1)
             acc += (predicted == targets).sum().item()
@@ -249,6 +251,7 @@ class RingAllReduce(DataParallel):
     def __init__(self, datamanager: DataManager, num_gpus=3, *args, **kwargs):
         gpu_ids = get_available_gpus()
         gpu_ids = gpu_ids[:num_gpus]
+        self.gpu_process_map = {gpu_id: i for i, gpu_id in enumerate(gpu_ids)} # easy way to change between gpu id and process id
         self.num_workers = num_gpus
         super().__init__(gpu_ids, *args, **kwargs)
         
@@ -281,7 +284,8 @@ class RingAllReduce(DataParallel):
         model = model.to(f"cuda:{self.gpu_ids[process_id]}")
         for epoch in range(self.epochs):
             # first train for an epoch and get grads
-            gradients = self.backprop_epoch(model, self.datamanager.get_dataloader(process_id), process_id)
+            print('Process', process_id, 'device:', f"cuda:{self.gpu_ids[process_id]}")
+            gradients = self.backprop_epoch(model, self.datamanager.get_dataloader(process_id), self.gpu_ids[process_id])
             
             # share-reduce
             for i in range(self.num_workers-1):
