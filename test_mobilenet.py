@@ -144,6 +144,7 @@ if __name__ == "__main__":
     parser.add_argument("--strategy", type=str, default="ring_all_reduce", choices=["ring_all_reduce", "param_server"])
     parser.add_argument("--lr", type=float, default=0.1)
     parser.add_argument("--use_wandb", type=bool, default=True)
+    parser.add_argument("--train_size", type=int, default=1000)
     args = parser.parse_args()
 
     # Instantiate the model
@@ -159,8 +160,7 @@ if __name__ == "__main__":
         download=True, 
         transform=transform
     )
-    train_size = 1000
-    train_indices = torch.randperm(len(train_dataset))[:train_size]
+    train_indices = torch.randperm(len(train_dataset))[:args.train_size]
 
     train_subset = torch.utils.data.Subset(train_dataset, train_indices)
     
