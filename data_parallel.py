@@ -112,7 +112,7 @@ class ParameterServer(DataParallel):
         other devices and collects gradients from them, averaging them.
         """
         assert gpu_id == self.server_device
-
+        self.start_time = time.time()
 
         torch.cuda.set_device(self.server_device)
         shared_model = shared_model.to(f"cuda:{self.server_device}")
@@ -120,7 +120,7 @@ class ParameterServer(DataParallel):
 
         for epoch in range(self.epochs):
             print(f"Server: Starting epoch {epoch + 1}")
-            self.start_time = time.time()
+            
             model_send_start_time = time.time()
             for _ in range(self.num_workers):
                 self.model_queue.put(shared_model.state_dict())
