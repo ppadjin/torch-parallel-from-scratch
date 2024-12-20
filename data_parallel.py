@@ -32,7 +32,7 @@ class DataParallel(ABC):
         """
         pass
     
-    def backprop_epoch(self, model, dataloader, process_id):
+    def backprop_epoch(self, model, dataloader, process_id, return_loss=False, log_loss=True):
         """
         Perform one backprop epoch and return gradients
         """
@@ -45,10 +45,12 @@ class DataParallel(ABC):
             outputs = model(inputs)
             outputs = F.log_softmax(outputs, dim=-1)
             loss = self.loss_fn(outputs, targets)
-            if self.use_wandb and process_id == 0:
+            if self.use_wandb and process_id == 0 and log_loss:
                 wandb.log({"training loss": loss.item()})
             loss.backward()
-        return [param.grad.clone() for param in model.parameters()] # collecting gradients
+        
+        grads = [param.grad.clone() for param in model.parameters()] 
+        return grads if not return_loss else (grads, loss.item())
 
     def calculate_acc(self, model, dataloader, process_id):
         acc = 0
@@ -281,11 +283,17 @@ class RingAllReduce(DataParallel):
         """
         model.train()
         torch.cuda.set_device(self.gpu_ids[process_id])
+        start_time = time.time()
         model = model.to(f"cuda:{self.gpu_ids[process_id]}")
         for epoch in range(self.epochs):
             # first train for an epoch and get grads
             print('Process', process_id, 'device:', f"cuda:{self.gpu_ids[process_id]}")
-            gradients = self.backprop_epoch(model, self.datamanager.get_dataloader(process_id), self.gpu_ids[process_id])
+            gradients, curr_loss = self.backprop_epoch(
+                model,
+                self.datamanager.get_dataloader(process_id),
+                self.gpu_ids[process_id],
+                return_loss=True,
+                log_loss=False)
             
             # share-reduce
             for i in range(self.num_workers-1):
@@ -326,7 +334,7 @@ class RingAllReduce(DataParallel):
             acc = self.calculate_acc(model, self.datamanager.get_dataloader(process_id), process_id)
             print(f"Process {process_id}: Epoch {epoch + 1}, acc: {acc}")
             if self.use_wandb and process_id == 0:
-                wandb.log({"training acc": acc})
+                wandb.log({"training acc": acc, "time": time.time() - start_time, "training loss": curr_loss})
 
         print(f"Process {process_id} exiting...")
 
