@@ -1,4 +1,8 @@
 import subprocess
+import torch
+import torchvision
+from torchvision import transforms
+
 
 def divide_to_chunks(l, n, return_slices=False):
     """
@@ -45,3 +49,19 @@ def get_available_gpus(th=10):
             if gpu_utilization < th: available_gpus.append(gpu_index)
 
         return available_gpus
+
+def get_data(train_size = 1000):
+    transform = transforms.Compose([
+        transforms.ToTensor(),  # This will also normalize from [0, 255] to [0, 1]
+    ])
+
+    train_dataset = torchvision.datasets.CIFAR10(
+        root='./data', 
+        train=True,
+        download=True, 
+        transform=transform
+    )
+    train_indices = torch.randperm(len(train_dataset))[:train_size]
+
+    train_subset = torch.utils.data.Subset(train_dataset, train_indices)
+    return train_subset
