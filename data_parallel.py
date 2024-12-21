@@ -252,7 +252,7 @@ class RingAllReduce(DataParallel):
     """
     def __init__(self, datamanager: DataManager, num_gpus=3, *args, **kwargs):
         gpu_ids = get_available_gpus()
-        gpu_ids = gpu_ids[:num_gpus]
+        gpu_ids = gpu_ids[-num_gpus:]
         self.gpu_process_map = {gpu_id: i for i, gpu_id in enumerate(gpu_ids)} # easy way to change between gpu id and process id
         self.num_workers = num_gpus
         super().__init__(gpu_ids, *args, **kwargs)
@@ -288,13 +288,17 @@ class RingAllReduce(DataParallel):
         for epoch in range(self.epochs):
             # first train for an epoch and get grads
             print('Process', process_id, 'device:', f"cuda:{self.gpu_ids[process_id]}")
+
+            epoch_calc_start_time = time.time()
             gradients, curr_loss = self.backprop_epoch(
                 model,
                 self.datamanager.get_dataloader(process_id),
                 self.gpu_ids[process_id],
                 return_loss=True,
                 log_loss=False)
+            epoch_calc_time = time.time() - epoch_calc_start_time
             
+            share_reduce_start_time = time.time()
             # share-reduce
             for i in range(self.num_workers-1):
                 curr_send_idx = (process_id - i) % self.num_workers
@@ -306,7 +310,9 @@ class RingAllReduce(DataParallel):
                     gradients[idx] += received_chunk[idx - slices[rec_idx].start].to(f"cuda:{self.gpu_ids[process_id]}")
 
             self.barrier.wait()
+            share_reduce_time = time.time() - share_reduce_start_time
 
+            share_only_start_time = time.time()
             # share-only stage to get the final grads
             for i in range(self.num_workers-1):
                 # now we need to shift them by one, because A contains the correct 1-chunks, B contains the correct 2-chunks, etc.
@@ -326,6 +332,7 @@ class RingAllReduce(DataParallel):
                     param.grad = grad if param.grad is None else param.grad + grad
 
             self.barrier.wait()
+            share_only_time = time.time() - share_only_start_time
 
             # update model
             self.optimizer.step()
@@ -334,7 +341,7 @@ class RingAllReduce(DataParallel):
             acc = self.calculate_acc(model, self.datamanager.get_dataloader(process_id), process_id)
             print(f"Process {process_id}: Epoch {epoch + 1}, acc: {acc}")
             if self.use_wandb and process_id == 0:
-                wandb.log({"training acc": acc, "time": time.time() - start_time, "training loss": curr_loss})
+                wandb.log({"training acc": acc, "time": time.time() - start_time, "training loss": curr_loss, "epoch_calculation_time": epoch_calc_time, "share_reduce_time": share_reduce_time, "share_only_time": share_only_time})
 
         print(f"Process {process_id} exiting...")
 
