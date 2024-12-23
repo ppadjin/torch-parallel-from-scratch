@@ -73,7 +73,7 @@ class ParameterServer(DataParallel):
     def __init__(self, datamanager, num_gpus=3, *args, **kwargs):
         self.num_workers = num_gpus - 1
         gpu_ids = get_available_gpus()
-        gpu_ids = gpu_ids[:num_gpus]
+        gpu_ids = gpu_ids[-num_gpus:]
         super().__init__(gpu_ids, *args, **kwargs)
         self.server_device = gpu_ids[0]
         self.workers = gpu_ids[1:]
@@ -152,8 +152,8 @@ class ParameterServer(DataParallel):
                         param.grad /= self.num_workers
                 
             # calculate current training accuracy
-            acc = self.calculate_acc(shared_model, self.datamanager.get_dataloader(gpu_id), gpu_id)
-            tr_loss = self.calculate_training_loss(shared_model, self.datamanager.get_dataloader(gpu_id), gpu_id)
+            acc = self.calculate_acc(shared_model, self.datamanager.get_dataloader(self.gpu_process_map[gpu_id]), gpu_id)
+            tr_loss = self.calculate_training_loss(shared_model, self.datamanager.get_dataloader(self.gpu_process_map[gpu_id]), gpu_id)
             if self.use_wandb:
                 if not self.init_wandb:
                     wandb.init(project="test", group='DDP')
