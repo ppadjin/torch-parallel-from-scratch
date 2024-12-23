@@ -24,7 +24,6 @@ def cleanup():
 def train(rank, world_size, args):
     setup(rank, world_size)
 
-    # Set device for this process
     torch.cuda.set_device(rank)
     if args.use_wandb and rank == 0:
         wandb.init(project=args.wandb_project_name, config=args.wandb_config)
@@ -32,19 +31,15 @@ def train(rank, world_size, args):
 
     train_dataset = get_data(args.train_size)
 
-    #sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
     train_loader = DataLoader(dataset=train_dataset, batch_size=args.batch_size, num_workers=2, pin_memory=True)
 
-    # Define the model, loss function, and optimizer
     model = MobileNetV2Like(input_shape=(3, 32, 32), num_classes=10).to(rank)
     ddp_model = DDP(model, device_ids=[rank])
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(ddp_model.parameters(), lr=args.lr)
 
-    # Training loop
     for epoch in range(args.epochs):
         ddp_model.train()
-        #sampler.set_epoch(epoch)  # Ensure proper shuffling in each epoch
         epoch_loss = 0.0
     
         data_loading_start_time = time.time()
@@ -68,7 +63,6 @@ def train(rank, world_size, args):
 
         epoch_time = time.time() - start_time
         
-        # calculate accuracy
         correct = 0
         total = 0
         with torch.no_grad():

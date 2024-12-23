@@ -20,6 +20,7 @@ from src.utils import get_available_gpus, get_data
 from src.model import MobileNetV2Like
 
 def train(model, train_loader, criterion, optimizer, device, epoch, args):
+    """This function is copied from MLSys Lab 2 and modified for this project"""
     model.train()  # Set model to training mode
     running_loss = 0.0
     total = 0
@@ -128,41 +129,9 @@ def train(model, train_loader, criterion, optimizer, device, epoch, args):
 
     return epoch_loss, epoch_acc
 
-def evaluate(model, test_loader, criterion, device):
-    model.eval()  # Set model to evaluation mode
-    test_loss = 0.0
-    test_correct = 0
-    test_total = 0
-
-    with torch.no_grad():
-        for inputs, labels in test_loader:
-            # Move data and labels to the device
-            inputs = inputs.to(device, non_blocking=True)
-            labels = labels.squeeze().to(device, non_blocking=True)
-
-            outputs = model(inputs)
-            loss = criterion(outputs, labels)
-
-            # Accumulate statistics
-            test_loss += loss.item() * inputs.size(0)
-            _, predicted = outputs.max(1)
-            test_total += labels.size(0)
-            test_correct += predicted.eq(labels).sum().item()
-
-    # Calculate average test loss and accuracy
-    test_loss = test_loss / len(test_loader.dataset)
-    test_acc = 100.0 * test_correct / test_total
-
-    print(
-        f'Test Loss: {test_loss:.4f} - '
-        f'Test Accuracy: {test_acc:.2f}%\n'
-    )
-
-    return test_loss, test_acc
 
 if __name__ == "__main__":
 
-    # Constants
     parser = argparse.ArgumentParser(description='Parameter server built-in')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for training')
     parser.add_argument('--epochs', type=int, default=5, help='Number of epochs to train')
@@ -174,38 +143,32 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # Load CIFAR-10 dataset
     train_subset = get_data(train_size=args.train_size)
     model = MobileNetV2Like(input_shape=(3, 32, 32), num_classes=10)
 
-    # Create data loaders
     train_loader = DataLoader(
         train_subset,
         batch_size=args.batch_size,
         shuffle=True
     )
 
-    # Move the model to device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
 
-    # Define the loss function and optimizer
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(
         model.parameters(), lr=args.lr
     )
 
-    # Learning rate scheduler (optional)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
 
     available_gpus = get_available_gpus()[:args.n_gpus]
     assert len(available_gpus) == args.n_gpus, f"There are only {len(available_gpus)} available GPUs, but you requested {args.n_gpus} GPUs."
-    # Check if multiple GPUs are available
+
     if len(available_gpus) > 1:
         print("Using", available_gpus, "GPUs for training.")
         model = nn.DataParallel(model, device_ids=available_gpus)
 
-    # Move model to the appropriate device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model.to(device)
     print("Param server builtin is running")
@@ -213,8 +176,6 @@ if __name__ == "__main__":
     if args.use_wandb:
         wandb.init(project="param_server_builtin")
         wandb.config.update(args)
-
-    # Main loop: perform training and evaluation
 
     args.start_time = time.time()
     for epoch in range(args.epochs):
