@@ -78,5 +78,16 @@ Experiments with the strategies are contained in the `experiments` folder. They 
 ### TL;DR results:
 
 
-![Parmeter server from-scratch vs builtin](results/param_server_comparison.png "Parameter server from-scratch vs builtin")
+### Parameter server: From scratch vs builtin training accuracy
+![Parmeter server from-scratch vs builtin](media/param_server.png "Parameter server from-scratch vs builtin")
 
+
+### Ring-all-reduce: From scratch vs builtin epoch time
+This is on small dataset, hence drastic perf difference. Builtin torch DDP performs better with more training data.
+
+![Ring all-reduce from-scratch vs builtin](media/ring_all_reduce.png "Ring all-reduce from-scratch vs builtin")
+
+
+### Scaling of strategies with respect to training data size
+
+![Scaling of strategies with respect to training data size](media/scaling.png "Scaling of strategies with respect to training data size")
