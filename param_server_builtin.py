@@ -15,9 +15,9 @@ import numpy as np
 import random
 import wandb
 import torch.nn as nn
-from data_parallel import DataParallel
-from utils import get_available_gpus, get_data
-from model import MobileNetV2Like
+from src.data_parallel import DataParallel
+from src.utils import get_available_gpus, get_data
+from src.model import MobileNetV2Like
 
 def train(model, train_loader, criterion, optimizer, device, epoch, args):
     model.train()  # Set model to training mode

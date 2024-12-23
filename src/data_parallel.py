@@ -11,9 +11,9 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from abc import ABC, abstractmethod
-from utils import divide_to_chunks
-from datamanager import DataManager
-from utils import get_available_gpus
+from src.utils import divide_to_chunks
+from src.datamanager import DataManager
+from src.utils import get_available_gpus
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6,7"  # Replace with your available GPU indices
 

@@ -12,12 +12,12 @@ import random
 import torch.nn as nn
 from timeit import timeit
 import matplotlib.pyplot as plt
-from model import MobileNetV2Like
+from src.model import MobileNetV2Like
 import wandb
 
-from data_parallel import RingAllReduce, ParameterServer
-from datamanager import DataManager
-from utils import get_data
+from src.data_parallel import RingAllReduce, ParameterServer
+from src.datamanager import DataManager
+from src.utils import get_data
 
 
 

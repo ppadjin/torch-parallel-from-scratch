@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader, Dataset
 from abc import ABC, abstractmethod
 
 import torch.utils.data.dataset
-from utils import divide_to_chunks
+from src.utils import divide_to_chunks
 from typing import Union
 
 
