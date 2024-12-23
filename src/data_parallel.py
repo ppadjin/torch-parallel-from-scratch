@@ -151,7 +151,6 @@ class ParameterServer(DataParallel):
                     if param.grad is not None:
                         param.grad /= self.num_workers
                 
-            # calculate current training accuracy
             acc = self.calculate_acc(shared_model, self.datamanager.get_dataloader(self.gpu_process_map[gpu_id]), gpu_id)
             tr_loss = self.calculate_training_loss(shared_model, self.datamanager.get_dataloader(self.gpu_process_map[gpu_id]), gpu_id)
             if self.use_wandb:
@@ -185,7 +184,6 @@ class ParameterServer(DataParallel):
 
             while self.workers_done.value < epoch:
                 pass
-            # Load updated model from shared model
             
             curr_state_dict = self.model_queue.get()
             local_model.load_state_dict(curr_state_dict)
@@ -286,7 +284,6 @@ class RingAllReduce(DataParallel):
         start_time = time.time()
         model = model.to(f"cuda:{self.gpu_ids[process_id]}")
         for epoch in range(self.epochs):
-            # first train for an epoch and get grads
             print('Process', process_id, 'device:', f"cuda:{self.gpu_ids[process_id]}")
 
             epoch_calc_start_time = time.time()
@@ -393,7 +390,6 @@ if __name__ == "__main__":
     num_gpus = 4
     dataset = torch.utils.data.TensorDataset(inputs, targets)
     strategy = "param_server"
-    #strategy = "ring_all_reduce"
 
     # wandb
     wandb.login()
@@ -407,9 +403,6 @@ if __name__ == "__main__":
 
     model = nn.Sequential(nn.Linear(10, 30), nn.ReLU(), nn.Linear(30, n_class))
 
-    #ring_all_reduce = RingAllReduce(datamanager, num_gpus=num_gpus)
-    #ring_all_reduce.train(model, epochs=2000)
-    
     if strategy == "ring_all_reduce":
         datamanager = DataManager(dataset, num_gpus, strategy=strategy)
         ring_all_reduce = RingAllReduce(datamanager, num_gpus=num_gpus, use_wandb=True)
