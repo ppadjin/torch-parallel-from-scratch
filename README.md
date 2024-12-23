@@ -71,3 +71,12 @@ For the ring all-reduce builtin strategy, torch.nn.parallel.DistributedDataParal
 python ring_all_reduce_builtin.py --n_gpus <gpus> --batch_size <batch_size> --epochs <epochs>
 ```
 
+## Experiments and Results
+
+Experiments with the strategies are contained in the `experiments` folder. They are standalone jupyter notebooks that use the results saved in `results` folder. Results can be seen by just openning the notebooks.
+
+### TL;DR results:
+
+
+![Parmeter server from-scratch vs builtin](results/param_server_comparison.png "Parameter server from-scratch vs builtin")
+
