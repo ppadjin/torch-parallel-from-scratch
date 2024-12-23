@@ -9,9 +9,9 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, DistributedSampler
 from torchvision import datasets, transforms
 from torch.nn.parallel import DistributedDataParallel as DDP
-from utils import get_data
+from src.utils import get_data
 import wandb
-from model import MobileNetV2Like
+from src.model import MobileNetV2Like
 
 def setup(rank, world_size):
     os.environ['MASTER_ADDR'] = 'localhost'
