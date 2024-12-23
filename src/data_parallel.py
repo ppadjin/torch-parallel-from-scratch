@@ -381,33 +381,3 @@ class RingAllReduce(DataParallel):
             (torch.ones(4,30)*process_val).to(f"cuda:{self.gpu_ids[process_id]}"),
             (torch.ones(4)*process_val).to(f"cuda:{self.gpu_ids[process_id]}"),
         ]
-
-if __name__ == "__main__":
-    N = 3000
-    n_class = 4
-    inputs = torch.randn(N, 10)
-    targets = torch.randint(0, n_class, (N,))
-    num_gpus = 4
-    dataset = torch.utils.data.TensorDataset(inputs, targets)
-    strategy = "param_server"
-
-    # wandb
-    wandb.login()
-    wandb.init(project="test", 
-                config={
-                    "n_gpus": num_gpus,
-                    "batch_size": 32,
-                    "epochs": 1000,
-                    "strategy": strategy}, 
-                group='DDP')
-
-    model = nn.Sequential(nn.Linear(10, 30), nn.ReLU(), nn.Linear(30, n_class))
-
-    if strategy == "ring_all_reduce":
-        datamanager = DataManager(dataset, num_gpus, strategy=strategy)
-        ring_all_reduce = RingAllReduce(datamanager, num_gpus=num_gpus, use_wandb=True)
-        ring_all_reduce.train(model, epochs=100)
-    elif strategy == "param_server":
-        datamanager = DataManager(dataset, num_gpus, strategy=strategy)
-        param_server = ParameterServer(datamanager, num_gpus=num_gpus, use_wandb=True)
-        param_server.train(model, epochs=100)
