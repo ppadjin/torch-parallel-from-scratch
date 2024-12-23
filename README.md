@@ -45,7 +45,7 @@ Updating happens in two steps:
 1. **Share-Reduce:** Gradient vector is split into N parts. In the first step, GPU i sends the i-th part of the gradient to the next GPU, in the ring topology. The gradients that are received are added to the local gradient.
 In the next step, GPUs send the gradient that was aggregated in the previous step to the next GPU. This is repeated N-1 times.
 
-Result of this step is that each GPU has one part of the gradient vector fully summed up.
+    Result of this step is that each GPU has one part of the gradient vector fully summed up.
 
 2. **Share-only:** In this step, each GPU just sends their fully aggregated part of the gradient to the other GPUs.
 
