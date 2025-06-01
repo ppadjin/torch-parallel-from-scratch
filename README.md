@@ -39,7 +39,7 @@ If there are N GPUs used for training, available training data will be split to 
 
 ### Ring all-reduce
 
-This strategy takes decentralized approach - All GPUs train the model on their local data, and then share the gradients with other GPUs. The gradients are averaged and then used to update the model weights.
+This strategy takes distributed approach - All GPUs train the model on their local data, and then share the gradients with other GPUs. The gradients are averaged and then used to update the model weights.
 
 **Update**:
 
