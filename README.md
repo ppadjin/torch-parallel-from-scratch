@@ -15,15 +15,13 @@ pip install -r requirements.txt
 Then, run the desired strategy:
 
 ```
-python train.py --strategy <strategy>
+python train.py --strategy {param_server | ring_all_reduce}
 ```
-
-Where `<strategy>` is one of `param_server` or `ring_all_reduce`.
 
 To run a training script with the predefined number of GPUs used, batch size, and number of epochs:
 
 ```
-python train.py --strategy <strategy> --n_gpus <gpus> --batch_size <batch_size> --epochs <epochs>
+python train.py --strategy {param_server | ring_all_reduce} --n_gpus <gpus> --batch_size <batch_size> --epochs <epochs>
 ```
 
 ## About Strategies
